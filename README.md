@@ -117,6 +117,8 @@ Open [localhost:3001](http://localhost:3001), load a preset, and edit the text a
 
 There's a [chess demo](http://localhost:3001/chess), too. The board is the input, legal moves are Choice options, and a Score question rates the position. Choose You, Kev, or Jev for either side to play against a model or watch Jev play Kev. Games are saved in `localStorage`. For Jev, put `AI_GATEWAY_API_KEY` in `playground/.env.local` and restart the playground server. The key stays on the server. Jev games do not need the local Kev API.
 
+To collect Kev self-play games without a browser, start `kev.serve`, then run `cd playground && npm run chess:traces -- --games 10 --out ../runs/chess-traces.jsonl`. Each JSONL line is a game with the request, returned move distribution, sampled action, board position, and final result at every ply. Games stopped by `--maxPlies` have a null result. The API rounds probabilities to two decimals, so these traces support analysis and supervised data preparation, but policy-gradient training needs unrounded action probabilities or logits from the model.
+
 ![Kev chess](docs/chess.png)
 
 ## Models

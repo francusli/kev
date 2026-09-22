@@ -3,6 +3,7 @@
 __pycache__/
 .pytest_cache/
 *.pyc
+/.env*
 
 # model runs: weights are large; keep eval results and training logs (for the plot)
 runs/*
