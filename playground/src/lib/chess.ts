@@ -19,14 +19,17 @@ export type ModelMove = {
   latency_ms: number;
   input_tokens: number;
   n_legal: number;
+  trace?: { request: SystemOneRequest; response: SystemOneResponse; selection: "sample" | "argmax"; action: string };
 };
 
-export type Player = "human" | "kev" | "jev";
+export type Player = "human" | "kev" | "jev" | "gpt-6-luna";
 export type Players = { white: Player; black: Player };
 
 export async function askModel(chess: Chess, player: Exclude<Player, "human">, sample = false): Promise<ModelMove> {
   const { req, legal } = buildRequest(chess);
-  const r: SystemOneResponse = player === "kev" ? await api.systemOne(req) : await api.jev(chess.history());
+  if (player !== "kev") req.model = player === "jev" ? "typesafe-ai/jev" : player;
+  const r: SystemOneResponse = player === "kev" ? await api.systemOne(req)
+    : await api.chess(player === "jev" ? "jev" : "openai", chess.history());
   const a = r.answers.move;
   const e = r.answers.evaluation;
   if (a.type !== "choice" || e.type !== "score") throw new Error("unexpected answer types");
@@ -36,7 +39,8 @@ export async function askModel(chess: Chess, player: Exclude<Player, "human">, s
     for (const [k, p] of Object.entries(a.probabilities)) { u -= p; if (u <= 0) { san = k; break; } }
   }
   if (!legal.some((m) => m.san === san)) throw new Error(`model returned ${JSON.stringify(san)}, which is not a legal move here`);
-  return { san, probabilities: a.probabilities, confidence: a.confidence, evaluation: e.score, evalConfidence: e.confidence, evalProbabilities: e.probabilities, latency_ms: r.latency_ms, input_tokens: r.usage.input_tokens, n_legal: legal.length };
+  return { san, probabilities: a.probabilities, confidence: a.confidence, evaluation: e.score, evalConfidence: e.confidence, evalProbabilities: e.probabilities, latency_ms: r.latency_ms, input_tokens: r.usage.input_tokens, n_legal: legal.length,
+    trace: { request: req, response: r, selection: sample ? "sample" : "argmax", action: san } };
 }
 
 // ---- persistence -------------------------------------------------------------------------------
@@ -76,7 +80,7 @@ export function legalMove(game: SavedGame, san: string): Move | undefined {
   return replay(game.moves).chess.moves({ verbose: true }).find((m) => m.san === san);
 }
 
-export function loadGames(): SavedGame[] {
+export function loadLegacyGames(): SavedGame[] {
   if (typeof window === "undefined") return [];
   let raw: unknown;
   try { raw = JSON.parse(localStorage.getItem(KEY) ?? "[]"); } catch { return []; }
@@ -84,14 +88,27 @@ export function loadGames(): SavedGame[] {
   // stored games are untrusted: keep only the legal prefix of each move list so the board and the list agree
   return raw.filter((g): g is SavedGame => !!g && typeof g.id === "string" && Array.isArray(g.moves)).map((g) => {
     const { chess, moves } = replay(g.moves);
-    const players = g.players && [g.players.white, g.players.black].every((p) => p === "human" || p === "kev" || p === "jev")
+    const players = g.players && [g.players.white, g.players.black].every((p) => p === "human" || p === "kev" || p === "jev" || p === "gpt-6-luna")
       ? g.players : legacyPlayers(g.mode);
     return { ...g, players, moves, pgn: chess.pgn(), result: moves.length === g.moves.length ? g.result : resultText(chess) };
   });
 }
 
-export function saveGames(games: SavedGame[]) {
-  localStorage.setItem(KEY, JSON.stringify(games.slice(-20)));
+export function clearLegacyGames() {
+  localStorage.removeItem(KEY);
+}
+
+export async function loadGames(): Promise<SavedGame[]> {
+  const response = await fetch("/api/chess/games", { cache: "no-store" });
+  if (!response.ok) throw new Error(`Could not load chess games (${response.status})`);
+  return response.json();
+}
+
+export async function saveGame(game: SavedGame): Promise<void> {
+  const response = await fetch("/api/chess/games", {
+    method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(game),
+  });
+  if (!response.ok) throw new Error(`Could not save chess game (${response.status})`);
 }
 
 export function resultText(chess: Chess): string | undefined {

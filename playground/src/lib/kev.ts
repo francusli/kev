@@ -18,6 +18,9 @@ export type SystemOneResponse = {
   answers: Record<string, Answer>;
   usage: { input_tokens: number; output_tokens: number };
   latency_ms: number;
+  probability_source?: "generated_estimates";
+  generated_probabilities?: { move: Record<string, number>; evaluation: Record<string, number> };
+  response_id?: string;
 };
 
 export type PermuteResponse = {
@@ -34,9 +37,9 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 
 export const api = {
   systemOne: (req: SystemOneRequest) => post<SystemOneResponse>("/v1/systemone", req),
-  jev: async (moves: string[]) => {
-    const r = await fetch("/api/chess/jev", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ moves }) });
-    if (!r.ok) throw new Error(`Jev ${r.status}: ${await r.text()}`);
+  chess: async (provider: "jev" | "openai", moves: string[]) => {
+    const r = await fetch(`/api/chess/${provider}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ moves }) });
+    if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
     return r.json() as Promise<SystemOneResponse>;
   },
   separate: (req: SystemOneRequest) => post<SystemOneResponse>("/v1/systemone/separate", req),

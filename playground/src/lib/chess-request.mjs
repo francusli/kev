@@ -1,5 +1,18 @@
+import { Chess } from "chess.js";
+
 export const PIECE_NAMES = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen", k: "king" };
 export const EVAL_LEVELS = ["Black is clearly winning", "Black is better", "Roughly equal", "White is better", "White is clearly winning"];
+
+// Hosted players accept history only; derive the board and legal options on the server.
+export function chessFromHistory(moves) {
+  if (!Array.isArray(moves) || moves.length > 250 || !moves.every(m => typeof m === "string" && m.length <= 16)) {
+    throw new Error("Invalid move history");
+  }
+  const chess = new Chess();
+  try { for (const move of moves) chess.move(move); } catch { throw new Error("Illegal move history"); }
+  if (chess.isGameOver()) throw new Error("Game is over");
+  return chess;
+}
 
 export function describeMove(m) {
   const parts = [`${PIECE_NAMES[m.piece]} ${m.from} to ${m.to}`];
@@ -11,20 +24,28 @@ export function describeMove(m) {
   return parts.join(", ");
 }
 
+// Keep history bounded for Kev's training context; the board and FEN remain complete.
+export function compactPositionState(state) {
+  if (typeof state?.moves_so_far !== "string") return state;
+  const { moves_so_far, ...position } = state;
+  return { ...position, recent_moves: moves_so_far.split(/(?=\b\d+\.\s)/).slice(-4).join("").trim() };
+}
+
 export function positionState(chess) {
   const side = chess.turn() === "w" ? "White" : "Black";
   const history = chess.history();
   const moves = history.length ? history.map((m, i) => (i % 2 === 0 ? `${i / 2 + 1}. ${m}` : m)).join(" ") : "(game start)";
-  return {
+  return compactPositionState({
     game: "chess",
     side_to_move: side,
     board: chess.ascii(),
     fen: chess.fen(),
     moves_so_far: moves,
     in_check: chess.inCheck(),
-  };
+  });
 }
 
+/** @returns {{ req: import("./kev").SystemOneRequest, legal: import("chess.js").Move[] }} */
 export function buildRequest(chess) {
   const legal = chess.moves({ verbose: true });
   const side = chess.turn() === "w" ? "White" : "Black";

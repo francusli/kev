@@ -1,6 +1,26 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { playGame, sampleMove } from "./chess-traces.mjs";
+import { options, playGame, runGames, sampleMove } from "./chess-traces.mjs";
+
+test("accepts a bounded game concurrency", () => {
+  assert.equal(options(["--games", "6", "--concurrency", "3"]).concurrency, 3);
+  assert.throws(() => options(["--concurrency", "0"]), /positive integer/);
+});
+
+test("runs games concurrently and saves each result once", async () => {
+  let active = 0;
+  let peak = 0;
+  const saved = [];
+  await runGames(7, 3, async index => {
+    active++;
+    peak = Math.max(peak, active);
+    await new Promise(resolve => setTimeout(resolve, 1));
+    active--;
+    return index;
+  }, async (game, index) => { assert.equal(game, index); saved.push(index); });
+  assert.equal(peak, 3);
+  assert.deepEqual(saved.sort((a, b) => a - b), [0, 1, 2, 3, 4, 5, 6]);
+});
 
 test("samples only legal moves using the returned probabilities", () => {
   const legal = [{ san: "e4" }, { san: "d4" }];

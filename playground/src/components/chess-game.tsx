@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Chess, type Square } from "chess.js";
 import Link from "next/link";
-import { askModel, EVAL_LEVELS, legalMove, loadGames, replay, saveGames, resultText, type ModelMove, type Player, type Players, type SavedGame } from "@/lib/chess";
+import { askModel, clearLegacyGames, EVAL_LEVELS, legalMove, loadGames, loadLegacyGames, replay, saveGame, resultText, type ModelMove, type Player, type Players, type SavedGame } from "@/lib/chess";
 import { ChessBoard } from "@/components/chess-board";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch";
 
 const PLAYER_OPTIONS: { value: Player; label: string }[] = [
   { value: "human", label: "You" }, { value: "kev", label: "Kev" }, { value: "jev", label: "Jev" },
+  { value: "gpt-6-luna", label: "GPT-6-Luna" },
 ];
 const DEFAULT_PLAYERS: Players = { white: "kev", black: "kev" };
 const playerName = (player: Player) => PLAYER_OPTIONS.find((p) => p.value === player)!.label;
@@ -75,21 +76,39 @@ export function ChessGame() {
   const [sample, setSample] = useState(false);
   const [auto, setAuto] = useState(false);
   const [thinking, setThinking] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Square | null>(null);
   const autoRef = useRef(false);
   const gameRef = useRef<SavedGame | null>(null); // latest persisted game, so async replies validate against the live position
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
 
-  // load from localStorage (an external store) after mount; deferred so SSR and first client render match
+  // Load JSON games and import old browser games after mount so SSR and the first client render match.
   useEffect(() => {
+    let active = true;
     const t = setTimeout(() => {
-      const saved = loadGames();
-      setGames(saved);
-      const last = saved.at(-1);
-      const g = last && !last.result ? last : newGame(DEFAULT_PLAYERS);
-      gameRef.current = g; setGame(g);
+      void (async () => {
+        try {
+          let saved = await loadGames();
+          const legacy = loadLegacyGames().filter((g) => !saved.some((current) => current.id === g.id));
+          for (const game of legacy) await saveGame(game);
+          if (legacy.length) { clearLegacyGames(); saved = await loadGames(); }
+          if (!active) return;
+          setGames(saved);
+          const last = saved.at(-1);
+          const g = last && !last.result ? last : newGame(DEFAULT_PLAYERS);
+          gameRef.current = g; setGame(g);
+        } catch (cause) {
+          if (!active) return;
+          setError((cause as Error).message);
+          const g = newGame(DEFAULT_PLAYERS);
+          gameRef.current = g; setGame(g);
+        } finally {
+          if (active) setLoading(false);
+        }
+      })();
     }, 0);
-    return () => clearTimeout(t);
+    return () => { active = false; clearTimeout(t); };
   }, []);
 
   const chess = useMemo(() => (game ? rebuild(game) : new Chess()), [game]);
@@ -106,7 +125,10 @@ export function ChessGame() {
   const persist = useCallback((g: SavedGame) => {
     gameRef.current = g;
     setGame(g);
-    setGames((prev) => { const next = [...prev.filter((x) => x.id !== g.id), g]; saveGames(next); return next; });
+    setGames((prev) => [...prev.filter((x) => x.id !== g.id), g]);
+    saveQueue.current = saveQueue.current.then(() => saveGame(g)).catch((cause) => {
+      setError((cause as Error).message);
+    });
   }, []);
 
   // The only way a move enters a game. `base` is the game the move was chosen for; it is applied only if that is still
@@ -203,7 +225,7 @@ export function ChessGame() {
       <div className="mt-10 max-w-2xl">
         <h1 className="text-2xl font-medium tracking-tight">Every move is a Choice question.</h1>
         <p className="mt-2 text-[15px] leading-6 text-muted-foreground">
-          The legal moves are the options, the board is the state. Kev and Jev return a probability for each move and a Score for who is better. Choose a player for each side to play yourself or watch the models play.
+          The legal moves are the options, the board is the state. Each model returns a move distribution and a Score for who is better. GPT-6-Luna generates probability estimates. Choose a player for each side to play yourself or watch the models play.
         </p>
       </div>
 
@@ -213,7 +235,7 @@ export function ChessGame() {
             {(["white", "black"] as const).map((side) => (
               <label key={side} className="flex items-center gap-2">
                 <span>{side === "white" ? "White" : "Black"}</span>
-                <select value={players[side]} disabled={thinking} onChange={(e) => start({ ...players, [side]: e.target.value as Player })}
+                <select value={players[side]} disabled={thinking || loading} onChange={(e) => start({ ...players, [side]: e.target.value as Player })}
                   className="rounded-md border border-border bg-card px-2 py-1 text-foreground">
                   {PLAYER_OPTIONS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
                 </select>
@@ -233,7 +255,7 @@ export function ChessGame() {
               <Button variant="outline" onClick={modelMove} disabled={!modelToMove || thinking} className="rounded-md shadow-none">Model moves</Button>
             ) : null}
             <Button variant="ghost" onClick={undo} disabled={!game || game.moves.length === 0 || thinking} className="rounded-md text-muted-foreground">Undo</Button>
-            <Button variant="ghost" onClick={() => start(players)} className="rounded-md text-muted-foreground">New game</Button>
+            <Button variant="ghost" onClick={() => start(players)} disabled={loading} className="rounded-md text-muted-foreground">New game</Button>
             <div className="ml-auto flex items-center gap-2">
               <Switch id="sample" checked={sample} onCheckedChange={(v) => setSample(!!v)} size="sm" />
               <Label htmlFor="sample" className="text-[13px] text-muted-foreground">Sample from distribution</Label>
@@ -263,6 +285,18 @@ export function ChessGame() {
           <p className="h-5 text-[13px] tabular-nums text-muted-foreground">
             {lastModel ? `${lastModel.latency_ms.toFixed(0)} ms · ${lastModel.input_tokens} input tokens · ${lastModel.n_legal} options` : "The model's distribution appears here after its first move."}
           </p>
+          {lastModel?.trace && <details className="rounded-md border border-border bg-card px-4 py-3 text-[12px]">
+            <summary className="cursor-pointer">Decision trace · {lastModel.trace.response.model}</summary>
+            {lastModel.trace.response.probability_source === "generated_estimates" &&
+              <p className="mt-2 text-muted-foreground">Probabilities are generated estimates, not measured token probabilities or calibrated confidence.</p>}
+            <pre className="mt-2 max-h-80 overflow-auto font-mono">{JSON.stringify(lastModel.trace, null, 2)}</pre>
+          </details>}
+          {game?.moves.some(m => m.model?.trace) && <Button variant="outline" className="self-start" onClick={() => {
+            const url = URL.createObjectURL(new Blob([JSON.stringify(game, null, 2)], { type: "application/json" }));
+            const link = document.createElement("a");
+            link.href = url; link.download = `chess-${game.id}.json`; link.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+          }}>Download game traces</Button>}
 
           <div className="rounded-md border border-border bg-card px-4 py-3">
             <p className="text-[12px] text-muted-foreground">Moves</p>
@@ -281,7 +315,7 @@ export function ChessGame() {
       </div>
 
       <div className="mt-8 rounded-md border border-border bg-card px-4 py-3">
-        <p className="text-[12px] text-muted-foreground">Previous games (stored in this browser)</p>
+        <p className="text-[12px] text-muted-foreground">Previous games (saved as local JSON files)</p>
         {finished.length === 0 ? (
           <p className="mt-1 text-[13px] text-muted-foreground">None yet. Finished games are listed here.</p>
         ) : (
