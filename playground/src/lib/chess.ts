@@ -68,9 +68,12 @@ export type ModelMove = {
   n_legal: number;
 };
 
-export async function askModel(chess: Chess, sample = false): Promise<ModelMove> {
+export type Player = "human" | "kev" | "jev";
+export type Players = { white: Player; black: Player };
+
+export async function askModel(chess: Chess, player: Exclude<Player, "human">, sample = false): Promise<ModelMove> {
   const { req, legal } = buildRequest(chess);
-  const r: SystemOneResponse = await api.systemOne(req);
+  const r: SystemOneResponse = player === "kev" ? await api.systemOne(req) : await api.jev(chess.history());
   const a = r.answers.move;
   const e = r.answers.evaluation;
   if (a.type !== "choice" || e.type !== "score") throw new Error("unexpected answer types");
@@ -85,14 +88,21 @@ export async function askModel(chess: Chess, sample = false): Promise<ModelMove>
 
 // ---- persistence -------------------------------------------------------------------------------
 
-export type Mode = "self" | "white" | "black"; // who the human plays; "self" = model vs model
+type Mode = "self" | "white" | "black"; // games saved before player selection existed
+
+function legacyPlayers(mode: Mode | undefined): Players {
+  if (mode === "white") return { white: "human", black: "kev" };
+  if (mode === "black") return { white: "kev", black: "human" };
+  return { white: "kev", black: "kev" };
+}
 
 export type SavedGame = {
   id: string;
   startedAt: number;
-  mode: Mode;
+  players: Players;
+  mode?: Mode;
   pgn: string;
-  moves: { san: string; by: "human" | "model"; model?: ModelMove }[];
+  moves: { san: string; by: Player | "model"; model?: ModelMove }[];
   result?: string;
 };
 
@@ -121,7 +131,9 @@ export function loadGames(): SavedGame[] {
   // stored games are untrusted: keep only the legal prefix of each move list so the board and the list agree
   return raw.filter((g): g is SavedGame => !!g && typeof g.id === "string" && Array.isArray(g.moves)).map((g) => {
     const { chess, moves } = replay(g.moves);
-    return moves.length === g.moves.length ? g : { ...g, moves, pgn: chess.pgn(), result: resultText(chess) };
+    const players = g.players && [g.players.white, g.players.black].every((p) => p === "human" || p === "kev" || p === "jev")
+      ? g.players : legacyPlayers(g.mode);
+    return { ...g, players, moves, pgn: chess.pgn(), result: moves.length === g.moves.length ? g.result : resultText(chess) };
   });
 }
 

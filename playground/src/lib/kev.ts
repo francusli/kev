@@ -34,6 +34,11 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 
 export const api = {
   systemOne: (req: SystemOneRequest) => post<SystemOneResponse>("/v1/systemone", req),
+  jev: async (moves: string[]) => {
+    const r = await fetch("/api/chess/jev", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ moves }) });
+    if (!r.ok) throw new Error(`Jev ${r.status}: ${await r.text()}`);
+    return r.json() as Promise<SystemOneResponse>;
+  },
   separate: (req: SystemOneRequest) => post<SystemOneResponse>("/v1/systemone/separate", req),
   permute: (request: SystemOneRequest, question: string, n_perm = 6) => post<PermuteResponse>("/v1/systemone/permute", { request, question, n_perm }),
   models: async () => {
